@@ -1,4 +1,4 @@
-use log::{debug, error, info, trace, warn};
+use log::{error, trace, warn};
 use pcli::model::Model;
 use serde_json;
 use std::path::Path;
@@ -32,6 +32,32 @@ impl Synchronizer {
         }
     }
 
+    pub fn init(&self) -> Result<(), SynchronizerError> {
+        println!(
+            "Initiating new session for tenant {tenant}...",
+            tenant = self.tenant.clone()
+        );
+
+        let executable = "pcli";
+        let subcommand = "invalidate";
+
+        let output = Command::new(executable)
+            .arg("--tenant")
+            .arg(self.tenant.to_owned())
+            .arg(subcommand)
+            .output()?;
+
+        trace!("Output: {}", String::from_utf8(output.stdout).unwrap());
+
+        if !output.status.success() {
+            error!("Command executed with failing error code {}", output.status);
+            Err(SynchronizerError::UploadError)
+        } else {
+            println!("Session initialized.");
+            Ok(())
+        }
+    }
+
     fn is_valid_path(&self, path: &Path) -> bool {
         let file_name = path.file_name();
         match file_name {
@@ -56,7 +82,7 @@ impl Synchronizer {
             return Ok(());
         }
 
-        info!(
+        println!(
             "Uploading {path} for tenant {tenant} to folder {folder_id}...",
             path = path.as_os_str().to_str().unwrap(),
             tenant = self.tenant.clone(),
@@ -94,7 +120,7 @@ impl Synchronizer {
             return Ok(());
         }
 
-        debug!(
+        println!(
             "Deleting {path} from tenant {tenant} in folder {folder_id}...",
             path = path.as_os_str().to_str().unwrap(),
             tenant = self.tenant.clone(),

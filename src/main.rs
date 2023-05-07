@@ -115,6 +115,7 @@ fn watch<P: AsRef<Path>>(
     let (tx, rx) = std::sync::mpsc::channel();
 
     let sync = Synchronizer::new(tenant, folder_id, units);
+    sync.init()?;
 
     // Automatically select the best implementation for your platform.
     // You can also access each implementation directly e.g. INotifyWatcher.
