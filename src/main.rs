@@ -33,15 +33,61 @@ struct Args {
     /// Physna folder ID
     #[arg(short, long)]
     folder_id: u32,
+
+    /// Unit of measure
+    #[arg(short, long)]
+    units: String,
+}
+
+fn print_banner() {
+    println!(
+        "{}",
+        r#"  _____   _____ _      _____    _____                  "#
+    );
+    println!(
+        "{}",
+        r#" |  __ \ / ____| |    |_   _|  / ____|                 "#
+    );
+    println!(
+        "{}",
+        r#" | |__) | |    | |      | |   | (___  _   _ _ __   ___ "#
+    );
+    println!(
+        "{}",
+        r#" |  ___/| |    | |      | |    \___ \| | | | '_ \ / __|"#
+    );
+    println!(
+        "{}",
+        r#" | |    | |____| |____ _| |_   ____) | |_| | | | | (__ "#
+    );
+    println!(
+        "{}",
+        r#" |_|     \_____|______|_____| |_____/ \__, |_| |_|\___|"#
+    );
+    println!(
+        "{}",
+        r#"                                       __/ |           "#
+    );
+    println!(
+        "{}",
+        r#"                                      |___/            "#
+    );
+    println!();
+    println!("Version 0.1.0");
+    println!("jchultarsky@physna.com");
+    println!();
 }
 
 fn main() -> Result<(), PcliSyncError> {
+    print_banner();
+
     let _log_init_result = pretty_env_logger::try_init_timed();
 
     let args = Args::parse();
     let directory = args.directory;
     let tenant = args.tenant;
     let folder_id = args.folder_id;
+    let units = args.units;
 
     if !directory.is_dir() {
         return Err(PcliSyncError::InvalidDirectory(
@@ -53,17 +99,22 @@ fn main() -> Result<(), PcliSyncError> {
         "Watching directory {}... To exit, press Ctrl-C.",
         directory.clone().into_os_string().into_string().unwrap()
     );
-    if let Err(e) = watch(directory.as_path(), tenant, folder_id) {
+    if let Err(e) = watch(directory.as_path(), tenant, folder_id, units) {
         println!("error: {:?}", e)
     }
 
     Ok(())
 }
 
-fn watch<P: AsRef<Path>>(path: P, tenant: String, folder_id: u32) -> Result<(), PcliSyncError> {
+fn watch<P: AsRef<Path>>(
+    path: P,
+    tenant: String,
+    folder_id: u32,
+    units: String,
+) -> Result<(), PcliSyncError> {
     let (tx, rx) = std::sync::mpsc::channel();
 
-    let sync = Synchronizer::new(tenant, folder_id);
+    let sync = Synchronizer::new(tenant, folder_id, units);
 
     // Automatically select the best implementation for your platform.
     // You can also access each implementation directly e.g. INotifyWatcher.
@@ -78,13 +129,17 @@ fn watch<P: AsRef<Path>>(path: P, tenant: String, folder_id: u32) -> Result<(), 
             Ok(event) => match event.kind {
                 EventKind::Create(kind) => match kind {
                     CreateKind::File => {
-                        println!("Create: {:?}", event.paths)
+                        for path in event.paths {
+                            sync.upload(&path)?
+                        }
                     }
                     _ => (),
                 },
                 EventKind::Modify(kind) => match kind {
                     ModifyKind::Data(_) => {
-                        println!("Modify: {:?}", event.paths);
+                        for path in event.paths {
+                            sync.modify(&path)?
+                        }
                     }
                     _ => (),
                 },
