@@ -1,9 +1,10 @@
-use log::{error, trace, warn};
+use log::{error, trace};
 use pcli::model::Model;
 use serde_json;
 use std::path::Path;
 use std::process::Command;
 use thiserror::Error;
+use uuid::Uuid;
 
 #[derive(Debug, Error)]
 pub enum SynchronizerError {
@@ -21,6 +22,7 @@ pub struct Synchronizer {
     folder_id: u32,
     tenant: String,
     units: String,
+    batch_uuid: Uuid,
 }
 
 impl Synchronizer {
@@ -29,6 +31,7 @@ impl Synchronizer {
             tenant,
             folder_id,
             units,
+            batch_uuid: Uuid::new_v4(),
         }
     }
 
@@ -92,19 +95,36 @@ impl Synchronizer {
         let executable = "pcli";
         let subcommand = "upload";
 
+        trace!(
+            "Executing: {executable} --tenant={tenant} {subcommand} --input {path} --batch {batch} --folder {folder} --units {units}",
+            executable = executable.clone(),
+            tenant = self.tenant.clone(),
+            subcommand = subcommand.clone(),
+            path = path.as_os_str().to_str().unwrap(),
+            batch = self.batch_uuid.to_string(),
+            folder = self.folder_id.clone(),
+            units = self.units.clone()
+        );
+
+        // slight delay
+        std::thread::sleep(std::time::Duration::from_secs(2));
+
         let output = Command::new(executable)
             .arg("--tenant")
             .arg(self.tenant.to_owned())
             .arg(subcommand)
             .arg("--input")
             .arg(path.as_os_str().to_str().unwrap())
+            .arg("--batch")
+            .arg(self.batch_uuid.to_string())
             .arg("--folder")
             .arg(self.folder_id.to_string())
             .arg("--units")
             .arg(self.units.to_owned())
+            .arg("--validate")
             .output()?;
 
-        trace!("Output: {}", String::from_utf8(output.stdout).unwrap());
+        //trace!("Output: {}", String::from_utf8(output.stdout).unwrap());
 
         if !output.status.success() {
             error!("Command executed with failing error code {}", output.status);
@@ -143,7 +163,7 @@ impl Synchronizer {
             .output()?;
 
         let json = String::from_utf8(output.stdout).unwrap();
-        trace!("Output: {}", json);
+        //trace!("Output: {}", json);
 
         if !output.status.success() {
             error!("Command executed with failing error code {}", output.status);
@@ -151,22 +171,18 @@ impl Synchronizer {
         } else {
             // parse the output and get the model UUID
             let models: Vec<Model> = serde_json::from_str(&json)?;
-            let model = models.first();
 
-            match model {
-                Some(model) => {
-                    let uuid = model.uuid;
-                    trace!("Deleting model {uuid}", uuid = model.uuid);
+            for model in models {
+                let uuid = model.uuid;
+                trace!("Deleting model {uuid}", uuid = model.uuid);
 
-                    let _ = Command::new(executable)
-                        .arg("--tenant")
-                        .arg(self.tenant.to_owned())
-                        .arg("delete-model")
-                        .arg("--uuid")
-                        .arg(uuid.to_string())
-                        .output()?;
-                }
-                None => warn!("Model not found!"),
+                let _ = Command::new(executable)
+                    .arg("--tenant")
+                    .arg(self.tenant.to_owned())
+                    .arg("delete-model")
+                    .arg("--uuid")
+                    .arg(uuid.to_string())
+                    .output()?;
             }
 
             Ok(())
@@ -174,11 +190,14 @@ impl Synchronizer {
     }
 
     pub fn modify(&self, path: &Path) -> Result<(), SynchronizerError> {
-        if !self.is_valid_path(path) {
-            return Ok(());
-        }
+        trace!("Data modified for {}", path.as_os_str().to_str().unwrap());
 
-        self.delete(path)?;
-        self.upload(path)
+        Ok(())
+        // if !self.is_valid_path(path) {
+        //     return Ok(());
+        // }
+
+        // self.delete(path)?;
+        // self.upload(path)
     }
 }

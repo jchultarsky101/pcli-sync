@@ -1,4 +1,5 @@
 use clap::Parser;
+use log::debug;
 use notify::{
     event::{CreateKind, ModifyKind, RemoveKind},
     Config, EventKind, RecommendedWatcher, RecursiveMode, Watcher,
@@ -130,6 +131,7 @@ fn watch<P: AsRef<Path>>(
             Ok(event) => match event.kind {
                 EventKind::Create(kind) => match kind {
                     CreateKind::File => {
+                        debug!("Create file detected");
                         for path in event.paths {
                             sync.upload(&path)?
                         }
@@ -138,6 +140,7 @@ fn watch<P: AsRef<Path>>(
                 },
                 EventKind::Modify(kind) => match kind {
                     ModifyKind::Data(_) => {
+                        debug!("Modify data detected");
                         for path in event.paths {
                             sync.modify(&path)?
                         }
@@ -146,6 +149,7 @@ fn watch<P: AsRef<Path>>(
                 },
                 EventKind::Remove(kind) => match kind {
                     RemoveKind::File => {
+                        debug!("Delete file detected");
                         for path in event.paths {
                             sync.delete(&path)?
                         }
