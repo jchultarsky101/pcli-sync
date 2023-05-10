@@ -1,38 +1,80 @@
-use log::{error, trace};
-use pcli::model::Model;
+use dirs::home_dir;
+use log::{debug, error, trace, warn};
+use pcli::{configuration, service::Api};
 use serde_json;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use thiserror::Error;
 use uuid::Uuid;
 
 #[derive(Debug, Error)]
 pub enum SynchronizerError {
-    #[error("deletion error")]
-    DeletionError,
     #[error("creation error")]
     UploadError,
     #[error("I/O error")]
     InputOutputError(#[from] std::io::Error),
     #[error("serialization error")]
     SerializationError(#[from] serde_json::Error),
+    #[error("PCLI error")]
+    PcliError(#[from] anyhow::Error),
+    #[error("invalid home directory")]
+    InvalidHomeDirectory,
+}
+
+#[derive(Debug)]
+pub enum SynchronizerEvent {
+    Create(PathBuf),
+    Delete(PathBuf),
+    //Modify(PathBuf),
 }
 
 pub struct Synchronizer {
-    folder_id: u32,
-    tenant: String,
-    units: String,
-    batch_uuid: Uuid,
+    pub path: PathBuf,
+    pub folder_id: u32,
+    pub tenant: String,
+    pub units: String,
+    pub batch_uuid: Uuid,
+    api: Api,
 }
 
 impl Synchronizer {
-    pub fn new(tenant: String, folder_id: u32, units: String) -> Synchronizer {
-        Synchronizer {
-            tenant,
+    fn init_api(tenant: String) -> Result<Api, SynchronizerError> {
+        let home_directory = home_dir();
+        let home_directory = match home_directory {
+            Some(dir) => dir,
+            None => return Err(SynchronizerError::InvalidHomeDirectory),
+        };
+        let home_directory = String::from(home_directory.to_str().unwrap());
+        let mut default_configuration_file_path = home_directory;
+        default_configuration_file_path.push_str("/.pcli.conf");
+
+        let configuration =
+            pcli::configuration::initialize(&String::from(default_configuration_file_path))?;
+        let api_configuration = configuration::from_client_configuration(&configuration, &tenant)?;
+
+        let api = Api::new(
+            api_configuration.base_url,
+            tenant.to_owned(),
+            api_configuration.access_token,
+        );
+
+        Ok(api)
+    }
+
+    pub fn new(
+        path: PathBuf,
+        tenant: String,
+        folder_id: u32,
+        units: String,
+    ) -> Result<Synchronizer, SynchronizerError> {
+        Ok(Synchronizer {
+            path,
+            tenant: tenant.clone(),
             folder_id,
             units,
             batch_uuid: Uuid::new_v4(),
-        }
+            api: Self::init_api(tenant)?,
+        })
     }
 
     pub fn init(&self) -> Result<(), SynchronizerError> {
@@ -50,8 +92,6 @@ impl Synchronizer {
             .arg(subcommand)
             .output()?;
 
-        trace!("Output: {}", String::from_utf8(output.stdout).unwrap());
-
         if !output.status.success() {
             error!("Command executed with failing error code {}", output.status);
             Err(SynchronizerError::UploadError)
@@ -61,143 +101,103 @@ impl Synchronizer {
         }
     }
 
-    fn is_valid_path(&self, path: &Path) -> bool {
+    fn is_valid_path(path: &Path) -> bool {
         let file_name = path.file_name();
         match file_name {
-            Some(file_name) => {
-                if file_name
-                    .to_os_string()
-                    .into_string()
-                    .unwrap()
-                    .starts_with(".")
-                {
-                    false
-                } else {
-                    true
-                }
-            }
+            Some(file_name) => !file_name.to_str().unwrap().starts_with("."),
             None => false,
         }
     }
 
-    pub fn upload(&self, path: &Path) -> Result<(), SynchronizerError> {
-        if !self.is_valid_path(path) {
-            return Ok(());
-        }
-
-        println!(
-            "Uploading {path} for tenant {tenant} to folder {folder_id}...",
-            path = path.as_os_str().to_str().unwrap(),
-            tenant = self.tenant.clone(),
-            folder_id = self.folder_id,
-        );
-
-        let executable = "pcli";
-        let subcommand = "upload";
-
-        trace!(
-            "Executing: {executable} --tenant={tenant} {subcommand} --input {path} --batch {batch} --folder {folder} --units {units}",
-            executable = executable.clone(),
-            tenant = self.tenant.clone(),
-            subcommand = subcommand.clone(),
-            path = path.as_os_str().to_str().unwrap(),
-            batch = self.batch_uuid.to_string(),
-            folder = self.folder_id.clone(),
-            units = self.units.clone()
-        );
-
-        // slight delay
-        std::thread::sleep(std::time::Duration::from_secs(2));
-
-        let output = Command::new(executable)
-            .arg("--tenant")
-            .arg(self.tenant.to_owned())
-            .arg(subcommand)
-            .arg("--input")
-            .arg(path.as_os_str().to_str().unwrap())
-            .arg("--batch")
-            .arg(self.batch_uuid.to_string())
-            .arg("--folder")
-            .arg(self.folder_id.to_string())
-            .arg("--units")
-            .arg(self.units.to_owned())
-            .arg("--validate")
-            .output()?;
-
-        //trace!("Output: {}", String::from_utf8(output.stdout).unwrap());
-
-        if !output.status.success() {
-            error!("Command executed with failing error code {}", output.status);
-            Err(SynchronizerError::UploadError)
-        } else {
-            // parse the output and get the model UUID
-            Ok(())
+    pub fn on_event(&mut self, event: SynchronizerEvent) -> Result<(), SynchronizerError> {
+        debug!("Event: {:?}", event);
+        match event {
+            SynchronizerEvent::Create(path) => self.upload(path.as_path()),
+            SynchronizerEvent::Delete(path) => self.delete(path.as_path()),
+            //SynchronizerEvent::Modify(path) => self.modify(path.as_path()),
         }
     }
 
-    pub fn delete(&self, path: &Path) -> Result<(), SynchronizerError> {
-        if !self.is_valid_path(path) {
+    fn upload(&mut self, path: &Path) -> Result<(), SynchronizerError> {
+        let path_str = path.as_os_str().to_str().unwrap();
+        debug!("Uploading: {}...", path_str);
+        println!("Uploading: {}...", path_str.clone());
+
+        if !Self::is_valid_path(path) {
+            warn!("Invalid path {}", path_str.clone());
             return Ok(());
         }
 
-        println!(
-            "Deleting {path} from tenant {tenant} in folder {folder_id}...",
-            path = path.as_os_str().to_str().unwrap(),
-            tenant = self.tenant.clone(),
-            folder_id = self.folder_id,
-        );
+        let model = self.api.upload_file(
+            self.folder_id,
+            path_str.clone(),
+            self.batch_uuid.clone(),
+            &self.units,
+            None,
+        )?;
 
-        let name = path.file_stem().unwrap().to_str().unwrap();
+        // validate the upload
+        match model {
+            Some(model) => {
+                trace!("Model uploaded with UUID of {}", model.uuid.to_string());
+                let two_seconds = std::time::Duration::from_millis(2000);
+                let start_time = std::time::Instant::now();
+                let timeout: u64 = 10000;
+                let mut state = model.state.clone();
+                trace!(
+                    "Checking the status for model {}...",
+                    model.uuid.to_string()
+                );
+                while state.ne("finished") && state.ne("failed") && state.ne("missing-parts") {
+                    let duration = start_time.elapsed().as_secs();
+                    if duration >= timeout {
+                        error!("Timeout wile validating model {}", model.uuid.to_string());
+                        break;
+                    }
 
-        let executable = "pcli";
-        let subcommand = "models";
-
-        let output = Command::new(executable)
-            .arg("--tenant")
-            .arg(self.tenant.to_owned())
-            .arg(subcommand)
-            .arg("--folder")
-            .arg(self.folder_id.to_string())
-            .arg("--search")
-            .arg(name)
-            .output()?;
-
-        let json = String::from_utf8(output.stdout).unwrap();
-        //trace!("Output: {}", json);
-
-        if !output.status.success() {
-            error!("Command executed with failing error code {}", output.status);
-            Err(SynchronizerError::DeletionError)
-        } else {
-            // parse the output and get the model UUID
-            let models: Vec<Model> = serde_json::from_str(&json)?;
-
-            for model in models {
-                let uuid = model.uuid;
-                trace!("Deleting model {uuid}", uuid = model.uuid);
-
-                let _ = Command::new(executable)
-                    .arg("--tenant")
-                    .arg(self.tenant.to_owned())
-                    .arg("delete-model")
-                    .arg("--uuid")
-                    .arg(uuid.to_string())
-                    .output()?;
+                    match self.api.get_model(&model.uuid, false, false) {
+                        Ok(verified_model) => {
+                            state = verified_model.state.clone();
+                        }
+                        Err(_) => break,
+                    }
+                    std::thread::sleep(two_seconds);
+                }
+                println!("Uploaded model {}", model.uuid.to_string());
             }
-
-            Ok(())
+            None => (),
         }
-    }
-
-    pub fn modify(&self, path: &Path) -> Result<(), SynchronizerError> {
-        trace!("Data modified for {}", path.as_os_str().to_str().unwrap());
 
         Ok(())
-        // if !self.is_valid_path(path) {
-        //     return Ok(());
-        // }
+    }
 
-        // self.delete(path)?;
-        // self.upload(path)
+    fn delete(&self, path: &Path) -> Result<(), SynchronizerError> {
+        let path_str = path.as_os_str().to_str().unwrap();
+        debug!("Deleting: {}...", path_str);
+        println!("Deleting: {}...", path_str.clone());
+
+        if !Self::is_valid_path(path) {
+            warn!("Invalid path {}", path_str.clone());
+            return Ok(());
+        }
+
+        let search = path.file_stem().unwrap().to_str().unwrap().to_string();
+        trace!(
+            "Searching for model by name \"{}\" in folder {}...",
+            search.clone(),
+            self.folder_id
+        );
+        let list_of_models =
+            self.api
+                .list_all_models(vec![self.folder_id], Some(&search), false)?;
+
+        trace!("Found {} model(s)", list_of_models.models.len());
+        for model in list_of_models.models {
+            println!("Deleting {}...", model.uuid.to_string());
+            self.api.delete_model(&model.uuid)?;
+            println!("Deleted model {}", model.uuid.to_string());
+        }
+
+        Ok(())
     }
 }

@@ -1,14 +1,14 @@
 use clap::Parser;
-use log::debug;
+use log::{error, trace};
 use notify::{
     event::{CreateKind, ModifyKind, RemoveKind},
     Config, EventKind, RecommendedWatcher, RecursiveMode, Watcher,
 };
-use std::path::{Path, PathBuf};
+use std::{path::PathBuf, sync::Arc};
 use thiserror::Error;
 
 mod synchronizer;
-use synchronizer::{Synchronizer, SynchronizerError};
+use synchronizer::{Synchronizer, SynchronizerError, SynchronizerEvent};
 
 #[derive(Error, Debug)]
 enum PcliSyncError {
@@ -18,6 +18,8 @@ enum PcliSyncError {
     SynchronizationError(#[from] SynchronizerError),
     #[error("Directory scan error")]
     NotifyError(#[from] notify::Error),
+    #[error("Process was terminated")]
+    Terminated,
 }
 
 #[derive(Parser, Debug)]
@@ -85,38 +87,58 @@ fn main() -> Result<(), PcliSyncError> {
     let _log_init_result = pretty_env_logger::try_init_timed();
 
     let args = Args::parse();
-    let directory = args.directory;
+    let path = args.directory;
+    let path2 = path.to_owned();
     let tenant = args.tenant;
     let folder_id = args.folder_id;
     let units = args.units;
+    let path_str = path.clone().into_os_string().into_string().unwrap();
 
-    if !directory.is_dir() {
-        return Err(PcliSyncError::InvalidDirectory(
-            directory.into_os_string().into_string().unwrap(),
-        ));
+    if !path.clone().is_dir() {
+        return Err(PcliSyncError::InvalidDirectory(path_str.clone()));
     }
 
     println!(
         "Watching directory {}... To exit, press Ctrl-C.",
-        directory.clone().into_os_string().into_string().unwrap()
+        path_str.clone(),
     );
-    if let Err(e) = watch(directory.as_path(), tenant, folder_id, units) {
-        println!("error: {:?}", e)
+
+    // spawn the event listener thread
+    let (sender, receiver) = std::sync::mpsc::channel::<SynchronizerEvent>();
+    let handle = std::thread::spawn(move || -> Result<(), SynchronizerError> {
+        let mut sync = Box::new(Synchronizer::new(
+            path.to_owned(),
+            tenant,
+            folder_id,
+            units,
+        )?);
+        sync.init()?;
+
+        loop {
+            let event = receiver.recv().unwrap();
+            sync.on_event(event)?;
+
+            std::thread::sleep(std::time::Duration::from_millis(1000));
+        }
+    });
+
+    // Start the directory watcher
+    if let Err(e) = watch(Arc::new(Box::new(sender)), path2) {
+        eprintln!("error: {:?}", e);
+        ::std::process::exit(exitcode::DATAERR);
     }
+
+    // Join with the main thread to finish all operations in projgress before exiting
+    let _ = handle.join();
 
     Ok(())
 }
 
-fn watch<P: AsRef<Path>>(
-    path: P,
-    tenant: String,
-    folder_id: u32,
-    units: String,
+fn watch<P: AsRef<Box<std::sync::mpsc::Sender<SynchronizerEvent>>>>(
+    sender: P,
+    path: PathBuf,
 ) -> Result<(), PcliSyncError> {
     let (tx, rx) = std::sync::mpsc::channel();
-
-    let sync = Synchronizer::new(tenant, folder_id, units);
-    sync.init()?;
 
     // Automatically select the best implementation for your platform.
     // You can also access each implementation directly e.g. INotifyWatcher.
@@ -124,34 +146,50 @@ fn watch<P: AsRef<Path>>(
 
     // Add a path to be watched. All files and directories at that path and
     // below will be monitored for changes.
-    watcher.watch(path.as_ref(), RecursiveMode::Recursive)?;
+    watcher.watch(path.as_path(), RecursiveMode::Recursive)?;
 
     for res in rx {
         match res {
             Ok(event) => match event.kind {
                 EventKind::Create(kind) => match kind {
                     CreateKind::File => {
-                        debug!("Create file detected");
+                        trace!("Create action detected");
                         for path in event.paths {
-                            sync.upload(&path)?
+                            let response = sender
+                                .as_ref()
+                                .send(SynchronizerEvent::Create(path.clone()));
+                            match response {
+                                Ok(()) => (),
+                                Err(_) => return Err(PcliSyncError::Terminated),
+                            }
                         }
                     }
                     _ => (),
                 },
                 EventKind::Modify(kind) => match kind {
                     ModifyKind::Data(_) => {
-                        debug!("Modify data detected");
+                        /*
                         for path in event.paths {
-                            sync.modify(&path)?
+                            sender
+                                .as_ref()
+                                .send(SynchronizerEvent::Modify(path.clone()))
+                                .unwrap();
                         }
+                        */
                     }
                     _ => (),
                 },
                 EventKind::Remove(kind) => match kind {
                     RemoveKind::File => {
-                        debug!("Delete file detected");
+                        trace!("Delete action detected");
                         for path in event.paths {
-                            sync.delete(&path)?
+                            let response = sender
+                                .as_ref()
+                                .send(SynchronizerEvent::Delete(path.clone()));
+                            match response {
+                                Ok(()) => (),
+                                Err(_) => return Err(PcliSyncError::Terminated),
+                            }
                         }
                     }
                     _ => (),
