@@ -11,11 +11,11 @@ in the background unattended.
 
 ## Change Log
 
-The current version is 0.1.0.
+The current version is 1.0.0.
 
-##### Version 0.1.0
+##### Version 1.0.0
 
-Initial pre-production version.
+Initial version with the minimum required functionality.
 
 ## Dependencies
 
