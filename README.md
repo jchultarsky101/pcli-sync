@@ -1,4 +1,4 @@
-# PCLI Sync
+# PCLI Data Synchronizer
 
 This is a helper tool for automating the data replication with Physna. It works in conjunction with [PCLI](https://github.com/jchultarsky101/pcli).
 
@@ -11,27 +11,22 @@ in the background unattended.
 
 ## Change Log
 
-The current version is 0.1.0.
+The current version is 1.0.0.
 
-##### Version 0.1.0
+##### Version 1.0.0
 
-Initial pre-production version.
+Initial version with the minimum required functionality.
 
 ## Dependencies
 
-PCLI Sync uses PCLI for the actual Physna operations. Make sure that you have PCLI installed and configured correctly first. Ensure that PCLI is
-added to your system path so that you can execute by simply typing **pcli** without having to specify the path to the executable. For example:
-
-````bash
-pcli help
-````
+PCLI Sync uses PCLI for the actual Physna operations. Make sure that you have PCLI installed and configured correctly first.
 
 ## Installation
 
 PCLI Sync is available for download as an OS-navive executable. You can find the version specific to your operating system under releases. Downlooad it to your computer in
 a directory of your choice and configure your system PATH appropriatelly.
 
-There is no configuration file. All input paramters are provided as command line arguments when you start the process.
+The tool re-uses the configuration file used by PCLI. Make sure PCLI is properly configured first!
 
 ## Usage
 
@@ -123,10 +118,6 @@ When a new file is stored in the source directory, it will be uploaded to Physna
 #### File deleted
 
 If a file is deleted from the local directory, **pcli-sync** will issue a delete command to Physna.
-
-#### File is modified
-
-If the data in a file is changes, **pcli-sync** will first delete the model from Physna and then re-upload the new version to Physna.
 
 ### Stop the program
 
