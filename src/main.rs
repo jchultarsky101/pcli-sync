@@ -76,7 +76,6 @@ fn print_banner() {
         r#"                                      |___/            "#
     );
     println!();
-    println!("Version 0.1.0");
     println!("jchultarsky@physna.com");
     println!();
 }
