@@ -1,7 +1,7 @@
 use clap::Parser;
 use log::{error, trace};
 use notify::{
-    event::{CreateKind, ModifyKind, RemoveKind},
+    event::{CreateKind, ModifyKind, RemoveKind, RenameMode},
     Config, EventKind, RecommendedWatcher, RecursiveMode, Watcher,
 };
 use std::{path::PathBuf, sync::Arc};
@@ -166,19 +166,38 @@ fn watch<P: AsRef<Box<std::sync::mpsc::Sender<SynchronizerEvent>>>>(
                     }
                     _ => (),
                 },
-                EventKind::Modify(kind) => match kind {
-                    ModifyKind::Data(_) => {
-                        /*
-                        for path in event.paths {
-                            sender
-                                .as_ref()
-                                .send(SynchronizerEvent::Modify(path.clone()))
-                                .unwrap();
+                EventKind::Modify(kind) => {
+                    trace!("Modify kind is {:?}", kind);
+                    match kind {
+                        ModifyKind::Data(_) => {
+                            trace!("Modify event detected");
+                            /*
+                            for path in event.paths {
+                                sender
+                                    .as_ref()
+                                    .send(SynchronizerEvent::Modify(path.clone()))
+                                    .unwrap();
+                            }
+                            */
                         }
-                        */
+                        ModifyKind::Name(rename) => match rename {
+                            RenameMode::Any => {
+                                println!("Rename detected");
+                                for path in event.paths {
+                                    let response = sender
+                                        .as_ref()
+                                        .send(SynchronizerEvent::Rename(path.clone()));
+                                    match response {
+                                        Ok(()) => (),
+                                        Err(_) => return Err(PcliSyncError::Terminated),
+                                    }
+                                }
+                            }
+                            _ => (),
+                        },
+                        _ => (),
                     }
-                    _ => (),
-                },
+                }
                 EventKind::Remove(kind) => match kind {
                     RemoveKind::File => {
                         trace!("Delete action detected");
@@ -194,7 +213,7 @@ fn watch<P: AsRef<Box<std::sync::mpsc::Sender<SynchronizerEvent>>>>(
                     }
                     _ => (),
                 },
-                _ => println!("Other"),
+                _ => println!("Detected unsupported action"),
             },
             Err(e) => println!("watch error: {:?}", e),
         }

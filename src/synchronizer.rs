@@ -1,5 +1,5 @@
 use dirs::home_dir;
-use log::{debug, error, trace, warn};
+use log::{debug, error, trace};
 use pcli::{configuration, service::Api};
 use serde_json;
 use std::path::{Path, PathBuf};
@@ -25,6 +25,7 @@ pub enum SynchronizerError {
 pub enum SynchronizerEvent {
     Create(PathBuf),
     Delete(PathBuf),
+    Rename(PathBuf),
     //Modify(PathBuf),
 }
 
@@ -104,7 +105,10 @@ impl Synchronizer {
     fn is_valid_path(path: &Path) -> bool {
         let file_name = path.file_name();
         match file_name {
-            Some(file_name) => !file_name.to_str().unwrap().starts_with("."),
+            Some(file_name) => {
+                let file_name = file_name.to_str().unwrap();
+                !file_name.starts_with(".") && file_name.ends_with(".STL")
+            }
             None => false,
         }
     }
@@ -115,18 +119,22 @@ impl Synchronizer {
             SynchronizerEvent::Create(path) => self.upload(path.as_path()),
             SynchronizerEvent::Delete(path) => self.delete(path.as_path()),
             //SynchronizerEvent::Modify(path) => self.modify(path.as_path()),
+            SynchronizerEvent::Rename(path) => self.rename(path.as_path()),
         }
+    }
+
+    fn rename(&mut self, path: &Path) -> Result<(), SynchronizerError> {
+        self.upload(path)
     }
 
     fn upload(&mut self, path: &Path) -> Result<(), SynchronizerError> {
         let path_str = path.as_os_str().to_str().unwrap();
-        debug!("Uploading: {}...", path_str);
-        println!("Uploading: {}...", path_str.clone());
-
         if !Self::is_valid_path(path) {
-            warn!("Invalid path {}", path_str.clone());
             return Ok(());
         }
+
+        debug!("Uploading: {}...", path_str);
+        println!("Uploading: {}...", path_str.clone());
 
         let model = self.api.upload_file(
             self.folder_id,
@@ -141,9 +149,12 @@ impl Synchronizer {
             Some(model) => {
                 trace!("Model uploaded with UUID of {}", model.uuid.to_string());
                 let two_seconds = std::time::Duration::from_millis(2000);
+                let five_seconds = std::time::Duration::from_millis(5000);
                 let start_time = std::time::Instant::now();
                 let timeout: u64 = 10000;
                 let mut state = model.state.clone();
+
+                std::thread::sleep(five_seconds);
                 trace!(
                     "Checking the status for model {}...",
                     model.uuid.to_string()
@@ -173,13 +184,12 @@ impl Synchronizer {
 
     fn delete(&self, path: &Path) -> Result<(), SynchronizerError> {
         let path_str = path.as_os_str().to_str().unwrap();
-        debug!("Deleting: {}...", path_str);
-        println!("Deleting: {}...", path_str.clone());
-
         if !Self::is_valid_path(path) {
-            warn!("Invalid path {}", path_str.clone());
             return Ok(());
         }
+
+        debug!("Deleting: {}...", path_str);
+        println!("Deleting: {}...", path_str.clone());
 
         let search = path.file_stem().unwrap().to_str().unwrap().to_string();
         trace!(
