@@ -11,7 +11,11 @@ in the background unattended.
 
 ## Change Log
 
-The current version is 1.0.0.
+The current version is 1.0.1.
+
+##### Version 1.0.1
+
+* Now handles file modification events to accomodate OneDrive operations
 
 ##### Version 1.0.0
 
